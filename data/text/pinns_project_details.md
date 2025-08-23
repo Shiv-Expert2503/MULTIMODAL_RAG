@@ -2,7 +2,7 @@
 Solving the 1D Heat Equation with a Comparative Study of Optimizers and Adaptive Sampling
 
 
-The main plot shows the comparative loss curves for all three models. The corresponding image file is named pinns_comparative_total_loss.png.
+The main plot shows the comparative loss curves for all three models. The corresponding image file is named `pinns_comparative_total_loss.png`.
 
 ## Project Abstract
 
