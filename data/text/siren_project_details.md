@@ -109,11 +109,11 @@ While cosine activations could theoretically be employed, as `cos(x) = sin(x + \
   
     `nn.Linear → Sine Activation → nn.Linear → Sine → ... → Final Output`
 
-The following diagram shows the SIREN model architecture. The corresponding image file is named siren_model_architecture_diagram.png.
+The following diagram shows the SIREN model architecture. The corresponding image file is named `siren_model_architecture_diagram.png`.
 
 * Loss Curve after 10k epochs:
   
-This is the loss curve for the grayscale image after 10,000 epochs. The corresponding image file is named siren_loss_curve_after_10k_epochs.png.
+This is the loss curve for the grayscale image after 10,000 epochs. The corresponding image file is named `siren_loss_curve_after_10k_epochs.png`.
 
 ### Model Summary
 
