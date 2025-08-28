@@ -65,51 +65,51 @@ def chunk_documents(documents):
 # print("--- Models and client initialized ---")
 
 
-def embed_text_and_store(chunks, collection):
-    """
-    Generates embeddings for text chunks and stores them in the ChromaDB collection.
-    """
-    print(f"--- Embedding and storing {len(chunks)} text chunks ---")
+# def embed_text_and_store(chunks, collection):
+#     """
+#     Generates embeddings for text chunks and stores them in the ChromaDB collection.
+#     """
+#     print(f"--- Embedding and storing {len(chunks)} text chunks ---")
     
-    # ChromaDB's add method is optimized for batches. We'll prepare our data in lists.
-    documents_to_store = [chunk.page_content for chunk in chunks]
-    metadatas_to_store = [chunk.metadata for chunk in chunks]
-    ids_to_store = [f"text_{i}" for i in range(len(chunks))]
+#     # ChromaDB's add method is optimized for batches. We'll prepare our data in lists.
+#     documents_to_store = [chunk.page_content for chunk in chunks]
+#     metadatas_to_store = [chunk.metadata for chunk in chunks]
+#     ids_to_store = [f"text_{i}" for i in range(len(chunks))]
 
-    # Embed and add to the collection in batches for efficiency
-    # Note: ChromaDB's LangChain integration can also handle this, but doing it directly
-    # gives us more control and clarity.
-    embeddings = text_embedding_model.embed_documents(documents_to_store)
-    collection.add(
-        embeddings=embeddings,
-        documents=documents_to_store,
-        metadatas=metadatas_to_store,
-        ids=ids_to_store
-    )
-    print("--- Text chunks embedded and stored successfully ---")
+#     # Embed and add to the collection in batches for efficiency
+#     # Note: ChromaDB's LangChain integration can also handle this, but doing it directly
+#     # gives us more control and clarity.
+#     embeddings = text_embedding_model.embed_documents(documents_to_store)
+#     collection.add(
+#         embeddings=embeddings,
+#         documents=documents_to_store,
+#         metadatas=metadatas_to_store,
+#         ids=ids_to_store
+#     )
+#     print("--- Text chunks embedded and stored successfully ---")
 
-def embed_images_and_store(image_directory, collection):
-    """
-    Generates embeddings for images and stores them in the ChromaDB collection.
-    """
-    print(f"--- Embedding and storing images from {image_directory} ---")
-    image_files = [f for f in os.listdir(image_directory) if f.endswith(('.png', '.jpg', '.jpeg'))]
+# def embed_images_and_store(image_directory, collection):
+#     """
+#     Generates embeddings for images and stores them in the ChromaDB collection.
+#     """
+#     print(f"--- Embedding and storing images from {image_directory} ---")
+#     image_files = [f for f in os.listdir(image_directory) if f.endswith(('.png', '.jpg', '.jpeg'))]
     
-    # Prepare lists for batch addition
-    image_paths_to_store = [os.path.join(image_directory, file) for file in image_files]
-    ids_to_store = [f"image_{i}" for i in range(len(image_files))]
+#     # Prepare lists for batch addition
+#     image_paths_to_store = [os.path.join(image_directory, file) for file in image_files]
+#     ids_to_store = [f"image_{i}" for i in range(len(image_files))]
     
-    # Generate embeddings for all images
-    # The SentenceTransformer expects a list of PIL Image objects
-    pil_images = [Image.open(path) for path in image_paths_to_store]
-    embeddings = image_embedding_model.encode(pil_images)
+#     # Generate embeddings for all images
+#     # The SentenceTransformer expects a list of PIL Image objects
+#     pil_images = [Image.open(path) for path in image_paths_to_store]
+#     embeddings = image_embedding_model.encode(pil_images)
 
-    collection.add(
-        embeddings=embeddings.tolist(), # Convert numpy array to list
-        documents=image_paths_to_store, # Store the file path as the "document"
-        ids=ids_to_store
-    )
-    print("--- Images embedded and stored successfully ---")
+#     collection.add(
+#         embeddings=embeddings.tolist(), # Convert numpy array to list
+#         documents=image_paths_to_store, # Store the file path as the "document"
+#         ids=ids_to_store
+#     )
+#     print("--- Images embedded and stored successfully ---")
 
 
 # --- TEMPORARY TEST BLOCK ---
