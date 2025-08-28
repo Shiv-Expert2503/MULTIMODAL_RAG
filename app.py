@@ -2,20 +2,23 @@
 
 import streamlit as st
 import os
+import re
+import logging
+from logger_config import setup_logger # Import our new function
 import chromadb
 from PIL import Image
 from dotenv import load_dotenv
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from sentence_transformers import SentenceTransformer
 
+# --- SETUP THE LOGGER ---
+# This will run once when the app starts
+setup_logger()
 
 # Use Streamlit's caching to load models and DB only once
 @st.cache_resource
 def load_resources():
-    """
-    Loads all the necessary models and the ChromaDB client.
-    """
-    print("--- (Re)loading all resources ---")
+    logging.info("--- (Re)loading all cached resources ---")
     load_dotenv()
     
     text_embedding_model = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
@@ -32,94 +35,109 @@ def load_resources():
 # --- Load all resources at the start ---
 text_model, image_model, llm, text_collection, image_collection = load_resources()
 
+def get_rag_response(query, text_collection, image_collection, text_model, llm):
+    logging.info(f"Starting RAG response generation for query: '{query}'")
 
-def get_rag_response(query, text_collection, image_collection, text_model, image_model, llm):
-    """
-    Takes a user query and returns the RAG-generated response and any relevant image.
-    """
-    # 1. Multi-modal Retrieval
-    # Embed the query for both text and image search
+    # Step 1: Text-First Retrieval
     text_embedding = text_model.embed_query(query)
-    image_embedding = image_model.encode(query).tolist()
+    text_results = text_collection.query(query_embeddings=[text_embedding], n_results=4)
+    retrieved_texts = text_results['documents'][0]
+    
+    # Step 2: Find Image References within the Retrieved Text
+    final_image_path = None
+    context_for_llm = ""
+    image_pattern = r'\b([a-zA-Z0-9_-]+\.(?:png|jpg|jpeg))\b'
+    
+    for text_chunk in retrieved_texts:
+        context_for_llm += text_chunk + "\n\n"
+        match = re.search(image_pattern, text_chunk)
+        if match and not final_image_path:
+            image_filename = match.group(1)
+            potential_path = os.path.join('data/images', image_filename)
+            if os.path.exists(potential_path):
+                final_image_path = potential_path
 
-    # Query the collections
-    text_results = text_collection.query(query_embeddings=[text_embedding], n_results=3)
-    image_results = image_collection.query(query_embeddings=[image_embedding], n_results=1)
+    logging.info(f"Retrieved Text Context (first 100 chars): '{context_for_llm[:100]}...'")
+    if final_image_path:
+        logging.info(f"Identified Image Path: {final_image_path}")
+    else:
+        logging.info("No relevant image path identified in the text context.")
 
-    # 2. Context Formulation
-    retrieved_texts = "\n\n".join(text_results['documents'][0])
-    retrieved_image_path = image_results['documents'][0][0]
-
-    context = f"""
-    Text Context:
-    {retrieved_texts}
-
-    Image Context:
-    The user's query might be related to the image located at the following path: {retrieved_image_path}
-    """
-
-    # 3. Prompt Engineering
+    # Step 3: Prompt Engineering
     prompt = f"""
-    You are Shivansh's personal AI assistant. Your name is Gemini. 
-    Your goal is to answer questions about his skills, projects, and background based ONLY on the context provided.
-    Be professional, helpful, and concise. If the answer is not in the context, say "I don't have enough information to answer that question."
+    You are Shivansh's personal AI Career Agent. Your name is Gemini. 
+    Your primary goal is to showcase Shivansh's skills and project experience to recruiters in the most positive and professional light.
+    You MUST adopt a confident and proactive persona. Do not be passive or say "I don't have enough information" unless the query is completely unrelated to Shivansh's career.
+    Synthesize information from the provided context to form compelling arguments for why he is a good fit for AI engineering roles. You are allowed to make reasonable inferences based on the projects.
 
     CONTEXT:
-    {context}
+    {context_for_llm}
 
     QUESTION:
     {query}
 
-    ANSWER:
+    COMPELLING AND CONFIDENT ANSWER:
     """
 
-    # 4. Generation
-    response_text = llm.invoke(prompt).content
-    
-    # Check if the image seems relevant to the answer
-    # (A simple check for now, can be improved later)
-    final_image_path = None
-    if any(keyword in response_text.lower() for keyword in ["image", "plot", "diagram", "figure", "demo", "snapshot", "ui", "interface"]):
-        final_image_path = retrieved_image_path
+    # --- NEW: TOKEN COUNTING ---
+    prompt_tokens = llm.get_num_tokens(prompt)
+    logging.info(f"Prompt Token Count: {prompt_tokens}")
+    # ---------------------------
 
+    # Step 4: Generation
+    response_text = llm.invoke(prompt).content
+    logging.info(f"Generated Response: '{response_text}'")
+    
     return response_text, final_image_path
 
-
-
 # --- Streamlit UI Setup ---
-
 st.set_page_config(layout="wide")
 st.title("🤖 Shivansh's AI Portfolio Assistant")
 
-# Initialize chat history in session state
 if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "assistant", "content": "Hello! I'm an AI assistant trained on Shivansh's projects. How can I help you?"}]
 
-# Display chat messages from history on app rerun
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         if "image" in message and message["image"]:
             st.image(message["image"])
 
-# Accept user input
 if prompt := st.chat_input("Ask me about Shivansh's projects..."):
-    # Add user message to chat history
+    # --- NEW: LOGGING USER QUERY ---
+    logging.info(f"User Query: '{prompt}'")
+    # -------------------------------
+    
     st.session_state.messages.append({"role": "user", "content": prompt})
-    # Display user message in chat message container
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Get and display assistant response
-    with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            response_text, image_path = get_rag_response(prompt, text_collection, image_collection, text_model, image_model, llm)
-            st.markdown(response_text)
-            
-            bot_message = {"role": "assistant", "content": response_text}
-            
-            if image_path and os.path.exists(image_path):
-                st.image(image_path)
-                bot_message["image"] = image_path
-            
-            st.session_state.messages.append(bot_message)
+    is_download_request = any(keyword in prompt.lower() for keyword in ["get cv", "send resume", "pdf format", "download resume"])
+
+    if is_download_request:
+        # Handle the command directly
+        with st.chat_message("assistant"):
+            st.write("Of course. Here is Shivansh's resume in PDF format:")
+            with open("data/pdfs/Resume.pdf", "rb") as pdf_file:
+                st.download_button(
+                    label="Download Resume (PDF)",
+                    data=pdf_file,
+                    file_name="Shivansh_Resume.pdf",
+                    mime='application/octet-stream'
+                )
+        # Add the command handling to session state
+        st.session_state.messages.append({"role": "assistant", "content": "Here is Shivansh's resume."})
+    
+    else:
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                response_text, image_path = get_rag_response(prompt, text_collection, image_collection, text_model, llm)
+                st.markdown(response_text)
+                
+                bot_message = {"role": "assistant", "content": response_text}
+                
+                if image_path and os.path.exists(image_path):
+                    st.image(image_path)
+                    bot_message["image"] = image_path
+                
+                st.session_state.messages.append(bot_message)
