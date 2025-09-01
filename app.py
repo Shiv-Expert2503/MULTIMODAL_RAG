@@ -35,59 +35,78 @@ def load_resources():
 # --- Load all resources at the start ---
 text_model, image_model, llm, text_collection, image_collection = load_resources()
 
+
+# In app.py, this is your new and improved core logic function
 def get_rag_response(query, text_collection, image_collection, text_model, llm):
     logging.info(f"Starting RAG response generation for query: '{query}'")
 
-    # Step 1: Text-First Retrieval
+    # Step 1: Text-First Retrieval (same as before)
     text_embedding = text_model.embed_query(query)
-    text_results = text_collection.query(query_embeddings=[text_embedding], n_results=4)
+    text_results = text_collection.query(query_embeddings=[text_embedding], n_results=5) # Get 5 chunks for more context
     retrieved_texts = text_results['documents'][0]
     
-    # Step 2: Find Image References within the Retrieved Text
-    final_image_path = None
-    context_for_llm = ""
-    image_pattern = r'\b([a-zA-Z0-9_-]+\.(?:png|jpg|jpeg))\b'
+    # Step 2: Extract ALL potential image references from the context
+    context_for_llm = "\n\n".join(retrieved_texts)
     
-    for text_chunk in retrieved_texts:
-        context_for_llm += text_chunk + "\n\n"
-        match = re.search(image_pattern, text_chunk)
-        if match and not final_image_path:
-            image_filename = match.group(1)
-            potential_path = os.path.join('data/images', image_filename)
-            if os.path.exists(potential_path):
-                final_image_path = potential_path
+    image_pattern = r'\b([a-zA-Z0-9_-]+\.(?:png|jpg|jpeg))\b'
+    # Use set to get unique image filenames
+    candidate_images = set(re.findall(image_pattern, context_for_llm))
+    
+    candidate_images_str = ", ".join(candidate_images) if candidate_images else "None"
+    logging.info(f"Identified Candidate Images: {candidate_images_str}")
 
-    logging.info(f"Retrieved Text Context (first 100 chars): '{context_for_llm[:100]}...'")
-    if final_image_path:
-        logging.info(f"Identified Image Path: {final_image_path}")
-    else:
-        logging.info("No relevant image path identified in the text context.")
-
-    # Step 3: Prompt Engineering
+    # Step 3: Advanced Prompt Engineering (The "Brain Upgrade")
     prompt = f"""
     You are Shivansh's personal AI Career Agent. Your name is Gemini. 
     Your primary goal is to showcase Shivansh's skills and project experience to recruiters in the most positive and professional light.
     You MUST adopt a confident and proactive persona. Do not be passive or say "I don't have enough information" unless the query is completely unrelated to Shivansh's career.
     Synthesize information from the provided context to form compelling arguments for why he is a good fit for AI engineering roles. You are allowed to make reasonable inferences based on the projects.
 
-    CONTEXT:
+    AVAILABLE CONTEXT:
     {context_for_llm}
 
-    QUESTION:
-    {query}
+    AVAILABLE IMAGES:
+    {candidate_images_str}
 
-    COMPELLING AND CONFIDENT ANSWER:
+    USER'S QUESTION:
+    {query}
+    
+    ---
+    
+    INSTRUCTIONS:
+    1.  First, formulate a comprehensive and confident text answer based on the CONTEXT.
+    2.  After writing your answer, review the list of AVAILABLE IMAGES.
+    3.  If one or more images are directly relevant to your answer, list the SINGLE most relevant filename on a new line in the format:
+        `RELEVANT_IMAGE: [filename.png]`
+    4.  If you need to show multiple images for a multi-part answer (like showcasing projects), list each one after the relevant text section in the format:
+        `RELEVANT_IMAGE: [filename1.png]`
+        ... some more text ...
+        `RELEVANT_IMAGE: [filename2.png]`
+    5.  If NO images are relevant, do not add the `RELEVANT_IMAGE:` tag.
+    
+    YOUR RESPONSE:
     """
 
-    # --- NEW: TOKEN COUNTING ---
-    prompt_tokens = llm.get_num_tokens(prompt)
-    logging.info(f"Prompt Token Count: {prompt_tokens}")
-    # ---------------------------
-
     # Step 4: Generation
-    response_text = llm.invoke(prompt).content
-    logging.info(f"Generated Response: '{response_text}'")
-    
+    full_response = llm.invoke(prompt).content
+    logging.info(f"LLM Full Output:\n{full_response}")
+
+    # Step 5: Parse the LLM's output to separate text and images
+    # For now, we'll implement the single-image selection. Multi-image is a UI challenge.
+    response_text = full_response
+    final_image_path = None
+
+    if "RELEVANT_IMAGE:" in full_response:
+        # Split the response to get the text and the image tag
+        parts = full_response.split("RELEVANT_IMAGE:")
+        response_text = parts[0].strip()
+        image_filename = parts[1].strip()
+        
+        potential_path = os.path.join('data/images', image_filename)
+        if os.path.exists(potential_path):
+            final_image_path = potential_path
+            logging.info(f"LLM selected relevant image: {final_image_path}")
+
     return response_text, final_image_path
 
 # --- Streamlit UI Setup ---

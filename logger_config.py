@@ -36,4 +36,4 @@ def setup_logger():
     stream_handler.setFormatter(formatter)
     logger.addHandler(stream_handler)
 
-    logging.info("--- Logger initialized ---")
+    logging.info("Logger initialized")
