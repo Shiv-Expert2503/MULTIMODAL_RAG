@@ -36,28 +36,25 @@ def load_resources():
 text_model, image_model, llm, text_collection, image_collection = load_resources()
 
 
-# In app.py, this is your new and improved core logic function
 def get_rag_response(query, text_collection, image_collection, text_model, llm):
     logging.info(f"Starting RAG response generation for query: '{query}'")
 
-    # Step 1: Text-First Retrieval (same as before)
+    # Step 1 & 2: Retrieval and Candidate Identification (same as before)
     text_embedding = text_model.embed_query(query)
-    text_results = text_collection.query(query_embeddings=[text_embedding], n_results=5) # Get 5 chunks for more context
+    text_results = text_collection.query(query_embeddings=[text_embedding], n_results=5)
     retrieved_texts = text_results['documents'][0]
     
-    # Step 2: Extract ALL potential image references from the context
     context_for_llm = "\n\n".join(retrieved_texts)
     
     image_pattern = r'\b([a-zA-Z0-9_-]+\.(?:png|jpg|jpeg))\b'
-    # Use set to get unique image filenames
     candidate_images = set(re.findall(image_pattern, context_for_llm))
-    
     candidate_images_str = ", ".join(candidate_images) if candidate_images else "None"
     logging.info(f"Identified Candidate Images: {candidate_images_str}")
 
-    # Step 3: Advanced Prompt Engineering (The "Brain Upgrade")
+    # Step 3: Refined Prompt Engineering
+    # We will now ask it to be cleaner and not mention filenames in the main text.
     prompt = f"""
-    You are Shivansh's personal AI Career Agent. Your name is Gemini. 
+    You are Shivansh's personal AI Career Agent. Your name is AI Expert. Shivansh has built you.
     Your primary goal is to showcase Shivansh's skills and project experience to recruiters in the most positive and professional light.
     You MUST adopt a confident and proactive persona. Do not be passive or say "I don't have enough information" unless the query is completely unrelated to Shivansh's career.
     Synthesize information from the provided context to form compelling arguments for why he is a good fit for AI engineering roles. You are allowed to make reasonable inferences based on the projects.
@@ -75,39 +72,35 @@ def get_rag_response(query, text_collection, image_collection, text_model, llm):
     
     INSTRUCTIONS:
     1.  First, formulate a comprehensive and confident text answer based on the CONTEXT.
-    2.  After writing your answer, review the list of AVAILABLE IMAGES.
-    3.  If one or more images are directly relevant to your answer, list the SINGLE most relevant filename on a new line in the format:
+    2.  After writing your answer, if one or more images from the AVAILABLE IMAGES list are highly relevant, list each one on a **separate new line** at the very end of your response, using the format:
         `RELEVANT_IMAGE: [filename.png]`
-    4.  If you need to show multiple images for a multi-part answer (like showcasing projects), list each one after the relevant text section in the format:
-        `RELEVANT_IMAGE: [filename1.png]`
-        ... some more text ...
-        `RELEVANT_IMAGE: [filename2.png]`
-    5.  If NO images are relevant, do not add the `RELEVANT_IMAGE:` tag.
+    3.  Select the most important images that best illustrate your points.
+    4.  If NO images are relevant, do not add any `RELEVANT_IMAGE:` tags.
     
     YOUR RESPONSE:
     """
+
 
     # Step 4: Generation
     full_response = llm.invoke(prompt).content
     logging.info(f"LLM Full Output:\n{full_response}")
 
-    # Step 5: Parse the LLM's output to separate text and images
-    # For now, we'll implement the single-image selection. Multi-image is a UI challenge.
+    # Step 5: UPGRADED Parsing Logic for MULTIPLE images
     response_text = full_response
-    final_image_path = None
+    final_image_paths = [] # Now a list
 
     if "RELEVANT_IMAGE:" in full_response:
-        # Split the response to get the text and the image tag
-        parts = full_response.split("RELEVANT_IMAGE:")
-        response_text = parts[0].strip()
-        image_filename = parts[1].strip()
+        # Use regex to find all image tags and clean up the main text
+        image_tags = re.findall(r"RELEVANT_IMAGE:\s*(\S+)", full_response)
+        response_text = re.sub(r"RELEVANT_IMAGE:\s*\S+", "", full_response).strip()
         
-        potential_path = os.path.join('data/images', image_filename)
-        if os.path.exists(potential_path):
-            final_image_path = potential_path
-            logging.info(f"LLM selected relevant image: {final_image_path}")
+        for image_filename in image_tags:
+            potential_path = os.path.join('data/images', image_filename.strip())
+            if os.path.exists(potential_path):
+                final_image_paths.append(potential_path)
+                logging.info(f"LLM selected relevant image: {potential_path}")
 
-    return response_text, final_image_path
+    return response_text, final_image_paths # Return a list of paths
 
 # --- Streamlit UI Setup ---
 st.set_page_config(layout="wide")
@@ -119,8 +112,10 @@ if "messages" not in st.session_state:
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-        if "image" in message and message["image"]:
-            st.image(message["image"])
+        # Check for a list of images now
+        if "images" in message and message["images"]:
+            for image in message["images"]:
+                st.image(image)
 
 if prompt := st.chat_input("Ask me about Shivansh's projects..."):
     # --- NEW: LOGGING USER QUERY ---
@@ -147,16 +142,25 @@ if prompt := st.chat_input("Ask me about Shivansh's projects..."):
         # Add the command handling to session state
         st.session_state.messages.append({"role": "assistant", "content": "Here is Shivansh's resume."})
     
-    else:
+    else: # This handles the "project_question" intent from your previous setup
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                response_text, image_path = get_rag_response(prompt, text_collection, image_collection, text_model, llm)
-                st.markdown(response_text)
+                # --- (The following lines are where the changes are) ---
+
+                # Get the response. Note that image_path is now image_paths (a list)
+                response_text, image_paths = get_rag_response(prompt, text_collection, image_collection, text_model, llm)
                 
+                # Create the message object for session state
                 bot_message = {"role": "assistant", "content": response_text}
                 
-                if image_path and os.path.exists(image_path):
-                    st.image(image_path)
-                    bot_message["image"] = image_path
+                # Write the text response
+                st.markdown(response_text)
+                
+                # If the list of image paths is not empty, display them
+                if image_paths:
+                    bot_message["images"] = image_paths # Store the list
+                    for image_path in image_paths:
+                        if os.path.exists(image_path):
+                            st.image(image_path)
                 
                 st.session_state.messages.append(bot_message)
