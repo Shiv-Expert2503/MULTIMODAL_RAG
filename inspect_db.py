@@ -1,4 +1,3 @@
-# inspect_db.py
 import chromadb
 
 def inspect_database():
