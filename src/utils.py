@@ -1,16 +1,11 @@
-import streamlit as st
-import os
-import re
 import sys
 import logging
 import chromadb
-from PIL import Image
 from dotenv import load_dotenv
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from sentence_transformers import SentenceTransformer
 from src.exception import CustomException
 
-@st.cache_resource
+
 def load_resources():
     logging.info("--- (Re)loading all cached resources ---")
     load_dotenv()
@@ -47,37 +42,6 @@ def get_rag_response(query, text_collection, text_model, llm):
         logging.info(f"Generated Response: '{response_text}'")
         return response_text
     
-    except Exception as e:
-        error = CustomException(e, sys)
-        logging.error(error)
-        raise error
-
-def render_text_with_images(response_text, image_base_path="data/images"):
-    try:
-        image_pattern = r'([a-zA-Z0-9_\-]+\.(?:png|jpg|jpeg))\b'
-        last_index = 0
-        for match in re.finditer(image_pattern, response_text):
-            text_part = response_text[last_index:match.start()]
-            if text_part:
-                st.markdown(text_part, unsafe_allow_html=True)
-            
-            logging.info(f"Texts Part for images: {text_part}")
-            image_file = match.group(1)
-            image_path = os.path.join(image_base_path, image_file)
-            
-            logging.info(f"Rendering image: {image_path}")
-
-            if os.path.exists(image_path):
-                st.image(image_path)
-            else:
-                logging.warning(f"Image mentioned in text but not found: {image_file}")
-                st.markdown(f"`(Image not found: {image_file})`")
-            last_index = match.end()
-        
-        remaining_text = response_text[last_index:]
-        if remaining_text:
-            st.markdown(remaining_text, unsafe_allow_html=True)
-
     except Exception as e:
         error = CustomException(e, sys)
         logging.error(error)
