@@ -1,19 +1,16 @@
-# app.py
-
 import streamlit as st
 import os
 import re
 import logging
-from logger_config import setup_logger # Import our new function
+import sys
 import chromadb
 from PIL import Image
 from dotenv import load_dotenv
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from sentence_transformers import SentenceTransformer
 
-# --- SETUP THE LOGGER ---
-# This will run once when the app starts
-setup_logger()
+from src.exception import CustomException
+from src.logger import logging
 
 # Use Streamlit's caching to load models and DB only once
 @st.cache_resource
