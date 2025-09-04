@@ -1,4 +1,6 @@
 import sys
+import os
+import re
 import logging
 import chromadb
 from dotenv import load_dotenv
@@ -46,3 +48,29 @@ def get_rag_response(query, text_collection, text_model, llm):
         error = CustomException(e, sys)
         logging.error(error)
         raise error
+    
+def extract_image_paths(response_text, base_url="http://localhost:8000"):
+    """
+    Finds all image filenames in the text, checks if they exist locally,
+    and returns a list of full, web-accessible URLs for the frontend.
+    """
+    image_pattern = r'([a-zA-Z0-9_\-]+\.(?:png|jpg|jpeg))\b'
+    image_urls = []
+    
+    # The local path to the image directory
+    local_image_dir = "data/images"
+
+    for match in re.finditer(image_pattern, response_text):
+        image_file = match.group(1).strip()
+        
+
+        local_image_path = os.path.join(local_image_dir, image_file)
+        if os.path.exists(local_image_path):
+            image_url = f"{base_url}/images/{image_file}"
+            image_urls.append(image_url)
+            logging.info(f"Found and created URL for image: {image_url}")
+        else:
+            # If the file doesn't exist, just log it. Don't send a broken link.
+            logging.warning(f"Image '{image_file}' mentioned in text but not found locally.")
+            
+    return image_urls

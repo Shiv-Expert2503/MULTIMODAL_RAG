@@ -2,12 +2,14 @@ import sys
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-
+from fastapi.staticfiles import StaticFiles 
 from src.logger import logging
 from src.exception import CustomException
-from src.utils import load_resources, get_rag_response
+from src.utils import load_resources, get_rag_response, extract_image_paths
 
 app = FastAPI()
+
+app.mount("/images", StaticFiles(directory="data/images"), name="images")
 
 try:
     # Load all AI resources once when the server starts
@@ -42,8 +44,8 @@ def ask_agent(query: Query):
         question = query.question
         logging.info(f"API received query: {question}")
         response_text = get_rag_response(question, text_collection, text_model, llm)
-
-        return {"answer": response_text}
+        image_paths = extract_image_paths(response_text)
+        return {"answer": response_text, "images": image_paths}  
 
     except Exception as e:
         error = CustomException(e, sys)
