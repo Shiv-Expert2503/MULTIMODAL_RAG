@@ -1,4 +1,5 @@
 import sys
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -21,11 +22,8 @@ except Exception as e:
     # This prevents the server from starting in a broken state
     raise RuntimeError("Could not load AI models or database. Check logs.") from e
 
-
-origins = [
-    "http://localhost:5173", # Your local React dev server
-    "https://shiv2503portfolio.netlify.app", # Your deployed portfolio URL
-]
+allowed_origins_str = os.getenv("ALLOWED_ORIGINS", "")
+origins = [origin.strip() for origin in allowed_origins_str.split(',')]
 
 app.add_middleware(
     CORSMiddleware,
