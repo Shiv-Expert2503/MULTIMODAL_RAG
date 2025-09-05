@@ -49,7 +49,7 @@ def get_rag_response(query, text_collection, text_model, llm):
         logging.error(error)
         raise error
     
-def extract_image_paths(response_text, base_url="http://localhost:8000"):
+def extract_image_paths(response_text):
     """
     Finds all image filenames in the text, checks if they exist locally,
     and returns a list of full, web-accessible URLs for the frontend.
@@ -59,7 +59,8 @@ def extract_image_paths(response_text, base_url="http://localhost:8000"):
     
     # The local path to the image directory
     local_image_dir = "data/images"
-
+    # If not found than use local host as base url for backend
+    base_url = os.getenv("BACKEND_BASE_URL", "http://localhost:8000")
     for match in re.finditer(image_pattern, response_text):
         image_file = match.group(1).strip()
         
