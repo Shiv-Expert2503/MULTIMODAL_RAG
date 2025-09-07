@@ -1,4 +1,9 @@
+# Image and PDF files
 *.png filter=lfs diff=lfs merge=lfs -text
 *.jpg filter=lfs diff=lfs merge=lfs -text
 *.jpeg filter=lfs diff=lfs merge=lfs -text
 *.pdf filter=lfs diff=lfs merge=lfs -text
+
+# ChromaDB database files (using wildcards)
+chroma_db/**/*.bin filter=lfs diff=lfs merge=lfs -text
+chroma_db/**/*.sqlite3 filter=lfs diff=lfs merge=lfs -text
