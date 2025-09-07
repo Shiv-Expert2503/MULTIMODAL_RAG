@@ -4,8 +4,18 @@ import re
 import logging
 import chromadb
 from dotenv import load_dotenv
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from src.exception import CustomException
+
+TOPICS = [
+    "Physics-Informed Neural Networks (PINNs) Project",
+    "SIRENs (Sinusoidal Representation Networks) Project",
+    "Real-Time License Plate Anonymizer Project",
+    "Sensor Fault Detection MLOps Project",
+    "General questions about Shivansh's skills, background, resume, or contact info"
+]
 
 
 def load_resources():
@@ -103,3 +113,34 @@ def extract_image_paths(response_text):
             logging.warning(f"Image '{image_file}' mentioned in text but not found locally.")
             
     return image_urls
+
+
+def route_query(query, text_embedding_model):
+    """
+    Uses semantic similarity to classify a user's query into one of the predefined TOPICS.
+    """
+    logging.info(f"Routing query: '{query}'")
+    
+    query_embedding = text_embedding_model.embed_query(query)
+    
+    topic_embeddings = text_embedding_model.embed_documents(TOPICS)
+
+    similarities = cosine_similarity(
+        [query_embedding],
+        topic_embeddings
+    )[0] # Get the first row of the similarity matrix
+    
+    # Find the topic with the highest similarity score
+    most_similar_index = np.argmax(similarities)
+    highest_similarity = similarities[most_similar_index]
+    
+    # a threshold for a confident match
+    threshold = 0.75 
+    
+    if highest_similarity > threshold:
+        matched_topic = TOPICS[most_similar_index]
+        logging.info(f"Query routed to topic: '{matched_topic}' with score {highest_similarity:.2f}")
+        return matched_topic
+    else:
+        logging.info(f"Query did not meet similarity threshold. Highest score: {highest_similarity:.2f}")
+        return "general_query" # default category for unmatched queries
