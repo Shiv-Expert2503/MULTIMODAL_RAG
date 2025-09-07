@@ -3,6 +3,8 @@ import os
 import re
 import logging
 import chromadb
+import shutil
+import json
 from dotenv import load_dotenv
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
@@ -17,18 +19,28 @@ TOPICS = [
     "General questions about Shivansh's skills, background, resume, or contact info"
 ]
 
-
 def load_resources():
-    logging.info("--- (Re)loading all cached resources ---")
+    logging.info("--- Loading AI resources ---")
     load_dotenv()
+
+    source_db_path = "./chroma_db"
+    writable_db_path = "/tmp/chroma_db" 
+
+    # If the writable path doesn't exist, copy the pre-built DB from the read-only location
+    if not os.path.exists(writable_db_path):
+        logging.info(f"Copying database from {source_db_path} to {writable_db_path}")
+        shutil.copytree(source_db_path, writable_db_path)
+
     text_embedding_model = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
     llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.7)
-    client = chromadb.PersistentClient(path="./chroma_db")
+
+    client = chromadb.PersistentClient(path=writable_db_path)
+
     text_collection = client.get_collection("portfolio_text")
     return text_embedding_model, llm, text_collection
 
 
-def get_rag_response(query, text_collection, text_model, llm):
+def get_rag_response_as_text(query, text_collection, text_model, llm):
     try:
         logging.info(f"Starting RAG response generation for query: '{query}'")
         text_embedding = text_model.embed_query(query)
@@ -144,3 +156,67 @@ def route_query(query, text_embedding_model):
     else:
         logging.info(f"Query did not meet similarity threshold. Highest score: {highest_similarity:.2f}")
         return "general_query" # default category for unmatched queries
+    
+
+def get_rag_response_as_tree(query, text_collection, text_model, llm):
+    """
+    Performs a RAG query and asks the LLM to generate a JSON tree structure.
+    Includes a retry mechanism and returns None if JSON parsing fails.
+    """
+    logging.info("Attempting to generate JSON tree response.")
+    
+    # Step 1: Retrieve context, same as the text function
+    text_embedding = text_model.embed_query(query)
+    text_results = text_collection.query(query_embeddings=[text_embedding], n_results=5)
+    context_for_llm = "\n\n".join(text_results['documents'][0])
+
+    # Step 2: The new JSON-specific prompt
+    prompt = f"""
+    You are a knowledge architect. Your job is to analyze the provided context about one of Shivansh's projects and break it down into its core components.
+    You must respond ONLY with a single, valid JSON object and nothing else.
+
+    The JSON object must have this exact structure:
+    {{
+      "root_node": "Name of the Project",
+      "child_nodes": [
+        {{ "title": "Definition", "summary": "A concise, one-sentence summary of the project." }},
+        {{ "title": "Problem Solved", "summary": "A brief description of the problem the project addresses." }},
+        {{ "title": "Tech Stack", "summary": "A list of the key technologies used." }},
+        {{ "title": "Key Visuals", "summary": "A reference to the available demo images or videos." }}
+      ],
+      "follow_up_question": "Which of these topics would you like me to explain in more detail?"
+    }}
+    
+    Do not include any text, greetings, or markdown formatting before or after the JSON object.
+
+    CONTEXT:
+    {context_for_llm}
+
+    USER'S QUESTION:
+    {query}
+
+    VALID JSON RESPONSE:
+    """
+
+    for i in range(2): # Try up to 2 times tocheck is json format or not
+        try:
+            response_str = llm.invoke(prompt).content
+            logging.info(f"LLM attempt {i+1} raw output: {response_str}")
+            
+            json_match = re.search(r'\{.*\}', response_str, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+
+                parsed_json = json.loads(json_str)
+                logging.info(f"Successfully parsed JSON from LLM response {parsed_json}.")
+                return parsed_json 
+            else:
+                logging.warning(f"Attempt {i+1}: No JSON object found in the response.")
+
+        except json.JSONDecodeError as e:
+            logging.warning(f"Attempt {i+1}: Failed to parse JSON. Error: {e}. Retrying...")
+        except Exception as e:
+            raise CustomException(e, sys)
+
+    logging.error("Failed to generate valid JSON after multiple attempts.")
+    return None # Return None if all attempts fail
