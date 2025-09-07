@@ -628,32 +628,50 @@ def get_rag_response_as_tree(query, text_collection, text_model, llm):
         text_embedding = text_model.embed_query(query)
         text_results = text_collection.query(query_embeddings=[text_embedding], n_results=5)
         context_for_llm = "\n\n".join(text_results['documents'][0])
-
-        prompt = f"""
-        You are a knowledge architect. Your job is to analyze the provided context about one of Shivansh's projects and break it down into its core components.
-        You must respond ONLY with a single, valid JSON object and nothing else.
-
-        The JSON object must have this exact structure:
-        {{
-        "root_node": "Name of the Project",
-        "child_nodes": [
-            {{ "title": "Definition", "summary": "A concise, one-sentence summary of the project." }},
-            {{ "title": "Problem Solved", "summary": "A brief description of the problem the project addresses." }},
-            {{ "title": "Tech Stack", "summary": "A list of the key technologies used." }},
-            {{ "title": "Key Visuals", "summary": "A reference to the available demo images or videos." }}
-        ],
-        "follow_up_question": "Which of these topics would you like me to explain in more detail?"
-        }}
         
-        Do not include any text, greetings, or markdown formatting before or after the JSON object.
+        prompt = f"""
+            You are a knowledge architect. Your job is to analyze the provided context about Shivansh's portfolio and output a JSON tree.
 
-        CONTEXT:
-        {context_for_llm}
+            You must detect whether the user is asking about:
+            1) **ALL PROJECTS (portfolio-level)** → List each project as a child node.
+            - JSON format:
+            {{
+                "root_node": "Shivansh's Projects",
+                "child_nodes": [
+                {{ "title": "Project Name", "summary": "1–2 sentence summary of what this project is about." }},
+                {{ "title": "Project Name 2", "summary": "..." }}
+                ],
+                "follow_up_question": "Which project do you want me to explain in more detail?"
+            }}
 
-        USER'S QUESTION:
-        {query}
+            2) **ONE PROJECT (project-level)** → Break down the project into its components.
+            - JSON format:
+            {{
+                "root_node": "Name of the Project",
+                "child_nodes": [
+                {{ "title": "Definition", "summary": "1-sentence explanation." }},
+                {{ "title": "Problem Solved", "summary": "Short description of the problem it addresses." }},
+                {{ "title": "Tech Stack", "summary": "Key technologies used." }},
+                {{ "title": "Results", "summary": "What outcomes or metrics were achieved." }},
+                {{ "title": "Key Visuals", "summary": "Reference to demo images or videos, if any." }}
+                ],
+                "follow_up_question": "Which section would you like me to explain in more detail?"
+            }}
 
-        VALID JSON RESPONSE:
+            RULES:
+            - Always respond with ONLY a single valid JSON object, no extra text or Markdown.
+            - Do not include any text, greetings, or markdown formatting before or after the JSON object.
+            - If multiple projects are present in the context, choose format (1).
+            - If the query is clearly about one project, choose format (2).
+            - Do not invent projects or visuals — only use what is in the context.
+
+            CONTEXT:
+            {context_for_llm}
+
+            USER'S QUESTION:
+            {query}
+
+            VALID JSON RESPONSE:
         """
 
         for i in range(2):
