@@ -36,7 +36,10 @@ async def ask_agent(request: Request):
     try:
         data = await request.json()
         question = data.get("question")
-        chat_history = data.get("chat_history", [])
+        chat_history = data.get("chat_history") or []
+
+        logging.info(f"[DEBUG] question={question!r}, chat_history={(chat_history)}")
+
 
         if not question:
             return {"error": "No question provided"}, 400
