@@ -13,7 +13,7 @@ from src.exception import CustomException
 from src.logger import logging
 from collections import deque
 from typing import List, Dict, Any, Tuple
-
+from collections import deque, defaultdict
 
 TOPICS = [
     "Physics-Informed Neural Networks (PINNs) Project",
@@ -23,7 +23,6 @@ TOPICS = [
     "Real-Time License Plate Anonymizer Project",
     "Real-Time License Plate Blur Project",
     "Sensor Fault Detection MLOps Project",
-    "General questions about Shivansh Project"
 ]
 
 EMBED_CACHE_PATH = "./.topic_embeddings_cache.pkl"
@@ -47,6 +46,37 @@ def _build_topic_keyword_map(topics: List[str]) -> Dict[str, List[str]]:
     return kw_map
 
 TOPIC_KEYWORD_MAP = _build_topic_keyword_map(TOPICS)
+logging.info(f"Topic Keyword Map: {TOPIC_KEYWORD_MAP}")
+
+class TopicRegistry:
+    """
+    Maintains per-topic caches + states for sliding window memory.
+    Each topic gets its own deque + state (NEW or FOLLOWUP).
+    """
+    def __init__(self, maxlen=6):
+        self.registry = defaultdict(lambda: {
+            "messages": deque(maxlen=maxlen),
+            "state": "NEW"  # NEW → JSON, FOLLOWUP → text
+        })
+
+    def reset_topic(self, topic):
+        self.registry[topic]["messages"].clear()
+        self.registry[topic]["state"] = "NEW"
+
+    def push_message(self, topic, message):
+        self.registry[topic]["messages"].append(message)
+
+    def set_state(self, topic, state):
+        self.registry[topic]["state"] = state
+
+    def get_state(self, topic):
+        return self.registry[topic]["state"]
+
+    def get_messages(self, topic):
+        return list(self.registry[topic]["messages"])
+
+    def has_topic(self, topic):
+        return topic in self.registry
 
 
 class ConversationMemory:
@@ -219,6 +249,7 @@ class Router:
         # Embed
         try:
             qvec = self._embed_query(rewritten_query)
+            logging.info(f"[DEBUG] embeded successfully with qvec shape: {qvec.shape}")
         except Exception as e:
             logging.error("Embedding query failed: %s", e)
             raise CustomException(e, sys)

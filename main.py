@@ -1,17 +1,31 @@
-# main.py
+import asyncio
+import json
 import sys
 import os
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from src.logger import logging
 from src.exception import CustomException
-from src.utils import load_resources, get_rag_response_as_text, extract_image_paths, get_rag_response_as_tree
+from src.utils import (
+    load_resources,
+    Router,
+    TopicRegistry,
+    get_rag_response_as_text,
+    get_rag_response_as_tree,
+    extract_image_paths
+)
 
+# ----------------------------
+# App setup
+# ----------------------------
 app = FastAPI()
 app.mount("/images", StaticFiles(directory="data/images"), name="images")
 
+# ----------------------------
+# Load AI resources
+# ----------------------------
 try:
     text_model, llm, text_collection, router = load_resources()
     logging.info("--- AI Resources & Router loaded successfully on startup ---")
@@ -19,91 +33,145 @@ except Exception as e:
     logging.error(CustomException(e, sys))
     raise RuntimeError("Could not load AI models or database. Check logs.") from e
 
+# ----------------------------
+# Global components
+# ----------------------------
+topic_registry = TopicRegistry(maxlen=6)
+query_queue = asyncio.Queue()
+
+# ----------------------------
+# CORS setup
+# ----------------------------
 allowed_origins_str = os.getenv("ALLOWED_ORIGINS", "")
-origins = [origin.strip() for origin in allowed_origins_str.split(',') if origin.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=origins or ["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+origins = [origin.strip() for origin in allowed_origins_str.split(",") if origin.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins or ["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.get("/")
 def read_root():
     return {"status": "AI Portfolio Agent is running"}
 
-class Query(BaseModel):
+
+# ----------------------------
+# Request model
+# ----------------------------
+class QueryRequest(BaseModel):
     question: str
     chat_history: list = []
-
-@app.post("/ask")
-async def ask_agent(request: Request):
-    try:
-        data = await request.json()
-        question = data.get("question")
-        chat_history = data.get("chat_history") or []
-
-        logging.info(f"[DEBUG] question={question!r}, chat_history={(chat_history)}")
+    user_id: str = "default"  # extendable for multi-user
 
 
-        if not question:
-            return {"error": "No question provided"}, 400
+# ----------------------------
+# Worker
+# ----------------------------
+async def worker():
+    while True:
+        user_id, question, chat_history, future = await query_queue.get()
 
-        # Use the router to decide topic (includes memory-based rewrite & top-3 logging)
-        decision = router.route_query(question, chat_history)
-        topic = decision.get("matched_topic", "general_query")
+        try:
+            # Step 1: Route the query
+            decision = router.route_query(question, chat_history)
+            topic = decision.get("topic", "general_query")
+            state = topic_registry.get_state(topic)
 
-        # Determine if it's first mention of a project in this conversation
-        is_first_topic_mention = True
-        if "project" in topic.lower():
-            # scan chat_history for previous mention of same topic
-            for message in reversed(chat_history):
-                # we expect message may include 'topic' field if your frontend sets it
-                if message.get("topic") == topic:
-                    is_first_topic_mention = False
-                    break
-            # if not found by explicit field, do a content scan to be safe
-            if is_first_topic_mention:
-                for message in reversed(chat_history):
-                    if isinstance(message.get("content"), str) and topic.lower() in message.get("content", "").lower():
-                        is_first_topic_mention = False
-                        break
-        else:
-            is_first_topic_mention = False
+            logging.info(f"User: {user_id} | Topic: {topic} | State: {state} | Decision: {json.dumps(decision, indent=2)}")
+            # Step 2: Apply topic registry logic
+            if decision["matched_topic"] == "general_query":
+                # General query → bypass cache
+                response_type = "text"
+                final_answer = get_rag_response_as_text(
+                    question, chat_history, text_collection, text_model, llm
+                )
+                image_urls = extract_image_paths(final_answer)
 
-        logging.info(f"Router decision metadata: {decision}")
-
-        if is_first_topic_mention:
-            logging.info(f"First mention of topic '{topic}'. Attempting JSON tree response.")
-            tree_data = get_rag_response_as_tree(question, text_collection, text_model, llm)
-            if tree_data:
-                response = {"type": "tree", "data": tree_data, "topic": topic}
             else:
-                logging.warning("Tree generation failed. Falling back to standard text response.")
-                response_text = get_rag_response_as_text(question, chat_history, text_collection, text_model, llm)
-                image_urls = extract_image_paths(response_text)
-                response = {"type": "text", "answer": response_text, "images": image_urls, "topic": topic}
-        else:
-            logging.info(f"Follow-up or general query for topic '{topic}'. Generating text response.")
-            response_text = get_rag_response_as_text(question, chat_history, text_collection, text_model, llm)
-            image_urls = extract_image_paths(response_text)
-            response = {
-                "type": "text",
-                "answer": response_text,
+                if state == "NEW":
+                    # First mention → JSON tree
+                    response_type = "tree"
+                    tree_data = get_rag_response_as_tree(
+                        question, text_collection, text_model, llm
+                    )
+                    if tree_data:
+                        final_answer = tree_data
+                    else:
+                        logging.warning("Tree generation failed. Falling back to text.")
+                        response_type = "text"
+                        final_answer = get_rag_response_as_text(
+                            question, chat_history, text_collection, text_model, llm
+                        )
+                    topic_registry.set_state(topic, "FOLLOWUP")
+                else:
+                    # Follow-up → normal text
+                    response_type = "text"
+                    final_answer = get_rag_response_as_text(
+                        question, chat_history, text_collection, text_model, llm
+                    )
+
+                image_urls = extract_image_paths(final_answer)
+
+                # Store in topic registry
+                topic_registry.push_message(
+                    topic,
+                    {
+                        "question": question,
+                        "answer": final_answer,
+                        "type": response_type,
+                    },
+                )
+
+            # Step 3: Build response
+            result = {
+                "type": response_type,
+                "answer": final_answer if response_type == "text" else None,
+                "data": final_answer if response_type == "tree" else None,
                 "images": image_urls,
-                "topic": topic
+                "topic": topic,
+                "_routing_debug": {
+                    "matched_topic": decision.get("matched_topic"),
+                    "top3": decision.get("top3"),
+                    "highest_similarity": decision.get("highest_similarity"),
+                    "second_similarity": decision.get("second_similarity"),
+                    "gap": decision.get("gap"),
+                    "rewritten_query": decision.get("rewritten_query"),
+                    "rewrite_reason": decision.get("rewrite_reason"),
+                    "decision_reason": decision.get("decision_reason"),
+                },
             }
+            future.set_result(result)
 
-        # Add routing metadata to response for debugging (optional)
-        response["_routing_debug"] = {
-            "matched_topic": decision.get("matched_topic"),
-            "top3": decision.get("top3"),
-            "highest_similarity": decision.get("highest_similarity"),
-            "second_similarity": decision.get("second_similarity"),
-            "gap": decision.get("gap"),
-            "rewritten_query": decision.get("rewritten_query"),
-            "rewrite_reason": decision.get("rewrite_reason"),
-            "decision_reason": decision.get("decision_reason"),
-        }
+        except Exception as e:
+            future.set_exception(CustomException(e, sys))
+        finally:
+            query_queue.task_done()
 
-        return response
 
-    except Exception as e:
-        error = CustomException(e, sys)
-        logging.error(error)
-        return {"error": str(error)}, 500
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(worker())
+
+
+# ----------------------------
+# API endpoint
+# ----------------------------
+@app.post("/ask")
+async def ask_agent(req: QueryRequest):
+    future = asyncio.get_event_loop().create_future()
+    await query_queue.put((req.user_id, req.question, req.chat_history, future))
+    result = await future
+    safe_result = {
+        "type": result.get("type", "text"),            # default: text
+        "answer": result.get("answer", ""),            # default: empty string
+        "images": result.get("images", []),            # default: []
+        "topic": result.get("topic", None),            # default: None
+        "data": result.get("data", None),              # used only for tree JSON
+        "_routing_debug": result.get("_routing_debug", {})  # debug info
+    }
+
+    return safe_result
+
