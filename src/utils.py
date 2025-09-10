@@ -15,7 +15,19 @@ from collections import deque
 from typing import List, Dict, Any, Tuple
 from collections import deque, defaultdict
 
-TOPICS = [
+GENERAL_TOPICS = [
+    "general_query",
+    "all projects",
+    "Shivansh's portfolio overview",
+    "list of projects",
+    "about Shivansh",
+    "Shivansh summary",
+    "who is Shivansh",
+    "Shivansh GPA",
+    "his GPA"
+]
+
+TOPICS = GENERAL_TOPICS + [
     "Physics-Informed Neural Networks (PINNs) Project",
     "pinns project",
     "siren project",
@@ -219,52 +231,59 @@ class Router:
         return query, False, "no_candidate_found"
 
     def route_query(self, query: str, chat_history: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Main routing method. Returns a dict with decision metadata:
-        {
-          "matched_topic": str,
-          "top3": [(topic, score), ...],
-          "highest_similarity": float,
-          "second_similarity": float,
-          "gap": float,
-          "rewritten_query": str,
-          "rewrite_reason": str,
-          "decision_reason": str
-        }
-        """
         logging.info("Routing query: '%s'", query)
 
+        # ----------------------------
+        # LAYER 2: RULE-BASED OVERRIDES
+        # ----------------------------
+        q_lower = query.lower()
+        if "all project" in q_lower or "shivansh's project" in q_lower:
+            logging.info("Rule override → general_query (all projects detected)")
+            return {
+                "matched_topic": "general_query",
+                "top3": [],
+                "highest_similarity": 1.0,
+                "second_similarity": 0.0,
+                "gap": 1.0,
+                "rewritten_query": query,
+                "rewrite_reason": "rule_override_all_projects",
+                "decision_reason": "forced_general"
+            }
+        if ("gpa" in q_lower and "shivansh" in q_lower) or "his gpa" in q_lower:
+            logging.info("Rule override → general_query (GPA detected)")
+            return {
+                "matched_topic": "general_query",
+                "top3": [],
+                "highest_similarity": 1.0,
+                "second_similarity": 0.0,
+                "gap": 1.0,
+                "rewritten_query": query,
+                "rewrite_reason": "rule_override_gpa",
+                "decision_reason": "forced_general"
+            }
+
+        # ----------------------------
+        # Build memory from history
+        # ----------------------------
         chat_history = chat_history or []
-        logging.info(f"[DEBUG] chat_history type in the function in utils: {type(chat_history)}, length: {len(chat_history)}")
-        # Build memory from chat_history
         memory = ConversationMemory(window_size=MEMORY_WINDOW)
         memory.add_from_chat_history(chat_history)
         memory.debug_print()
 
-        # Try rewrite
+        # Coref rewrite
         rewritten_query, changed, rewrite_reason = self.rewrite_query_with_memory(query, memory)
-        if changed:
-            logging.info("Query rewritten for coref: '%s' -> '%s' (reason=%s)", query, rewritten_query, rewrite_reason)
 
-        # Embed
+        # Embedding similarity as before
         try:
             qvec = self._embed_query(rewritten_query)
-            logging.info(f"[DEBUG] embeded successfully with qvec shape: {qvec.shape}")
         except Exception as e:
             logging.error("Embedding query failed: %s", e)
             raise CustomException(e, sys)
 
-        # Compute similarities against precomputed topic embeddings
         sims = cosine_similarity([qvec], self.topic_embeddings)[0]
         sims = np.array(sims, dtype=float)
-
-        # Get top-3 candidates
         top_indices = np.argsort(sims)[::-1][:3]
         top3 = [(self.topics[i], float(sims[i])) for i in top_indices]
-
-        logging.info("Top-3 candidates for query '%s':", query)
-        for rank, (t, s) in enumerate(top3, start=1):
-            logging.info("  %d) %s (score=%.4f)", rank, t, s)
 
         highest_idx = top_indices[0]
         second_idx = top_indices[1] if len(top_indices) > 1 else None
@@ -272,9 +291,8 @@ class Router:
         second_sim = float(sims[second_idx]) if second_idx is not None else 0.0
         gap = highest_sim - second_sim
 
-        # Decision logic: gap-based acceptance
-        decision_reason = ""
         matched_topic = "general_query"
+        decision_reason = ""
 
         if highest_sim >= MIN_SIM:
             matched_topic = self.topics[highest_idx]
@@ -285,8 +303,10 @@ class Router:
         else:
             matched_topic = "general_query"
             decision_reason = f"rejected (top={highest_sim:.3f}, gap={gap:.3f})"
-
-        logging.info("Routing decision: %s -> %s", decision_reason, matched_topic)
+            
+        if matched_topic in GENERAL_TOPICS and matched_topic != "general_query":
+            logging.info(f"Normalizing matched topic '{matched_topic}' to 'general_query' for FSM.")
+            matched_topic = "general_query"
 
         return {
             "matched_topic": matched_topic,
@@ -298,6 +318,7 @@ class Router:
             "rewrite_reason": rewrite_reason,
             "decision_reason": decision_reason,
         }
+    
 
 # ----------------------------
 # Existing functions retained/updated (RAG / helpers)
@@ -367,13 +388,12 @@ def get_rag_response_as_text(query, chat_history, text_collection, text_model, l
         3) RESOURCES_ONLY (e.g., “give me the resources/source code/docs”):
         - Output ONLY a short bulleted list of Markdown links. No images. No extra prose.
         4) SHOW_IMAGE_ONLY (e.g., “show me only the image of …”):
-        - Output ONLY the Markdown image tag `![alt](filename.ext)` for the exact file(s) referenced by the context. No extra text.
+        - Output ONLY the Markdown image tag ![alt](filename.ext) for the exact file(s) referenced by the context. No extra text.
 
         ADDITIONAL GUARDRAILS:
         - If the user asks for “code/resources/docs”, don't summarize—just give the links.
         - If a table is available or beneficial, render it in Markdown.
-        - Never invent links; only use those present in the context. If none exist, say briefly: “No public link provided.”
-
+        - Never invent links; only use those present in the context.
         Use the following CHAT HISTORY to understand the context of the current question:
 
         CHAT HISTORY:
@@ -492,3 +512,49 @@ def get_rag_response_as_tree(query, text_collection, text_model, llm):
 
     except Exception as e:
         raise CustomException(e, sys)
+
+def cleanup_markdown_code_fences(response_text: str) -> str:
+    """
+    Finds Markdown image tags wrapped in backticks (e.g., `![...](...)`)
+    and removes the backticks to make them renderable.
+    """
+    # This pattern looks for: ` (a backtick), followed by
+    # (![...](...)) (a full Markdown image tag, which is captured), followed by
+    # ` (a closing backtick).
+    pattern = r'`(!\[.*?\]\(.*?\))`'
+    
+    # The replacement is just the captured group (the part inside the parentheses),
+    # which is the clean Markdown tag itself.
+    cleaned_text = re.sub(pattern, r'\1', response_text)
+    
+    if cleaned_text != response_text:
+        logging.info("Cleaned up backticks around Markdown image tags.")
+        
+    return cleaned_text
+
+def enrich_text_with_markdown_images(response_text: str, image_urls: List[str]) -> str:
+    """
+    Checks if image filenames found in the text are already in Markdown format.
+    If not, it replaces the plain filename with a Markdown image tag.
+    """
+    # Create a mapping from filename to full URL for easy lookup
+    url_map = {url.split('/')[-1]: url for url in image_urls}
+
+    for filename, full_url in url_map.items():
+        # Define the proper Markdown tag we expect
+        markdown_tag = f"![{filename.split('.')[0]}]({filename})"
+        
+        # Check if the filename is already part of a Markdown link, e.g., (filename.png)
+        # This is a simple but effective check to avoid replacing it twice.
+        if f"({filename})" in response_text:
+            # The LLM did its job correctly, so we do nothing.
+            continue
+        else:
+            # The LLM was lazy and just listed the filename. Let's fix it.
+            # We replace the first occurrence of the plain filename with the full Markdown tag.
+            logging.info(f"Enriching response: Found plain text '{filename}', converting to Markdown.")
+            response_text = response_text.replace(filename, markdown_tag, 1)
+
+    response_text = cleanup_markdown_code_fences(response_text)
+    logging.info(f"Final enriched response: {response_text}")
+    return response_text
