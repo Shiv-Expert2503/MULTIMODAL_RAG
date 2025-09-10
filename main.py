@@ -14,7 +14,8 @@ from src.utils import (
     TopicRegistry,
     get_rag_response_as_text,
     get_rag_response_as_tree,
-    extract_image_paths
+    extract_image_paths,
+    enrich_text_with_markdown_images
 )
 
 # ----------------------------
@@ -77,10 +78,11 @@ async def worker():
         try:
             # Step 1: Route the query
             decision = router.route_query(question, chat_history)
-            topic = decision.get("topic", "general_query")
+            topic = decision.get("matched_topic", "general_query")
             state = topic_registry.get_state(topic)
 
             logging.info(f"User: {user_id} | Topic: {topic} | State: {state} | Decision: {json.dumps(decision, indent=2)}")
+            image_urls = [] 
             # Step 2: Apply topic registry logic
             if decision["matched_topic"] == "general_query":
                 # General query → bypass cache
@@ -89,6 +91,7 @@ async def worker():
                     question, chat_history, text_collection, text_model, llm
                 )
                 image_urls = extract_image_paths(final_answer)
+                final_answer = enrich_text_with_markdown_images(final_answer, image_urls) 
 
             else:
                 if state == "NEW":
@@ -105,6 +108,8 @@ async def worker():
                         final_answer = get_rag_response_as_text(
                             question, chat_history, text_collection, text_model, llm
                         )
+                        image_urls = extract_image_paths(final_answer)
+                        final_answer = enrich_text_with_markdown_images(final_answer, image_urls) 
                     topic_registry.set_state(topic, "FOLLOWUP")
                 else:
                     # Follow-up → normal text
@@ -113,7 +118,8 @@ async def worker():
                         question, chat_history, text_collection, text_model, llm
                     )
 
-                image_urls = extract_image_paths(final_answer)
+                    image_urls = extract_image_paths(final_answer)
+                    final_answer = enrich_text_with_markdown_images(final_answer, image_urls) 
 
                 # Store in topic registry
                 topic_registry.push_message(
@@ -132,16 +138,7 @@ async def worker():
                 "data": final_answer if response_type == "tree" else None,
                 "images": image_urls,
                 "topic": topic,
-                "_routing_debug": {
-                    "matched_topic": decision.get("matched_topic"),
-                    "top3": decision.get("top3"),
-                    "highest_similarity": decision.get("highest_similarity"),
-                    "second_similarity": decision.get("second_similarity"),
-                    "gap": decision.get("gap"),
-                    "rewritten_query": decision.get("rewritten_query"),
-                    "rewrite_reason": decision.get("rewrite_reason"),
-                    "decision_reason": decision.get("decision_reason"),
-                },
+                "_routing_debug": decision
             }
             future.set_result(result)
 
